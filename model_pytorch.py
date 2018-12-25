@@ -243,6 +243,7 @@ class ClfHead(nn.Module):
     def forward(self, h, x):
         clf_h = h.view(-1, self.n_embd)
         flat = x[..., 0].contiguous().view(-1)
+        # https://github.com/huggingface/pytorch-openai-transformer-lm/issues/21
         clf_h = clf_h[flat == self.clf_token, :]
         clf_h = self.dropout(clf_h)
         clf_logits = self.linear(clf_h)
@@ -337,6 +338,18 @@ class DoubleHeadModel(nn.Module):
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
                                  path_names='./'):
+    """
+    :param model:
+    :param n_ctx: the maximum number of token in an input sequence.
+    :param n_special:the number of special tokens used to format the input properly. For example
+           in the ROCStories problem, we use 3 additional tokens, _start_, _delimiter_ and _classify_.
+    :param n_transfer: the number of pre-trained layers that we will be loaded, the next ones will be initialized randomly.
+    :param n_embd: the dimension of the embedding and of the vector associated to each position in the network.
+           It has the value 768 because the network uses multi-head attention with 12 heads and 768 = 12 * 64.
+    :param path:
+    :param path_names:
+    :return:
+    """
     # Load weights from TF model
     print("Loading weights...")
     names = json.load(open(path_names + 'parameters_names.json'))
