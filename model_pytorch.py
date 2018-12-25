@@ -276,6 +276,7 @@ class DoubleHeadModel(nn.Module):
             elif task_head_type == 'similarity':
                 self.task_head = SimilarityHead(clf_token, cfg)
             elif task_head_type == 'inference':
+                # inference task is a special case of classification task
                 # the three classes correspond to entailment, contradiction and neutral.
                 self.task_head = ClfHead(clf_token, cfg, 3)
             else:

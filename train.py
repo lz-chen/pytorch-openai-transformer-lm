@@ -17,7 +17,9 @@ from utils import (encode_dataset, iter_data,
                    ResultLogger, make_path)
 from loss import MultipleChoiceLossCompute
 
+
 def transform_roc(X1, X2, X3):
+    # todo: this part is for embedding the first 4 sentences with both candidate answers, but deails still need to be figure out
     n_batch = len(X1)
     xmb = np.zeros((n_batch, 2, n_ctx, 2), dtype=np.int32)
     mmb = np.zeros((n_batch, 2, n_ctx), dtype=np.float32)
@@ -151,7 +153,10 @@ if __name__ == '__main__':
     parser.add_argument('--max_grad_norm', type=int, default=1)
     parser.add_argument('--lr', type=float, default=6.25e-5)
     parser.add_argument('--lr_warmup', type=float, default=0.002)
-    parser.add_argument('--n_ctx', type=int, default=512)
+    parser.add_argument('--n_ctx', type=int, default=512,
+                        help='The transformer has a maximum number of tokens to perform its attention - n_ctx. '
+                             'You can set this param to proper value for your GPU and limit input to tranformer '
+                             'only by n_ctx last tokens during generation.')
     parser.add_argument('--n_embd', type=int, default=768)
     parser.add_argument('--n_head', type=int, default=12)
     parser.add_argument('--n_layer', type=int, default=12)
@@ -197,10 +202,13 @@ if __name__ == '__main__':
 
     logger = ResultLogger(path=os.path.join(log_dir, '{}.jsonl'.format(desc)), **args.__dict__)
     text_encoder = TextEncoder(args.encoder_path, args.bpe_path)
+    # encoder: 'model/encoder_bpe_40000.json' ;;  bpe: 'model/vocab_40000.bpe'
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
 
     print("Encoding dataset...")
+    # .*X1: first_four_sentences (len=1497) || .*X2: first_choice(len=1497) ||
+    # .*X3: second_choice(len=1497) || .*Y: true_choice(len=1497)
     ((trX1, trX2, trX3, trY),
      (vaX1, vaX2, vaX3, vaY),
      (teX1, teX2, teX3)) = encode_dataset(*rocstories(data_dir, n_valid=args.n_valid),
@@ -209,16 +217,19 @@ if __name__ == '__main__':
     encoder['_delimiter_'] = len(encoder)
     encoder['_classify_'] = len(encoder)
     clf_token = encoder['_classify_']
-    n_special = 3
+    n_special = 3  # meaning _start_, _delimiter_, _classify_?
     max_len = n_ctx // 2 - 2
     n_ctx = min(max(
+        # list of max len of (first 4 sentence + either 1st or 2nd candidate answer) in train set
         [len(x1[:max_len]) + max(len(x2[:max_len]),
                                  len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]
         + [len(x1[:max_len]) + max(len(x2[:max_len]),
                                    len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
         + [len(x1[:max_len]) + max(len(x2[:max_len]),
                                    len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
-        ) + 3, n_ctx)
+        # compare beteen: 1) the max of max len of (first 4 sentence + either 1st or 2nd candidate answer) in train, valid, test set + 3 (start, delim, extract, see paper figure 1)
+        #                 2) n_ctx (which is 512)
+    ) + 3, n_ctx)
     vocab = n_vocab + n_special + n_ctx
     trX, trM = transform_roc(trX1, trX2, trX3)
     vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
