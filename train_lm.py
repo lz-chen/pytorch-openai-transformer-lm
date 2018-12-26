@@ -10,7 +10,7 @@ from sklearn.utils import shuffle
 
 from analysis import rocstories as rocstories_analysis
 from datasets import rocstories
-from model_pytorch import DoubleHeadModel, load_openai_pretrained_model
+from model_pytorch import DoubleHeadModel, load_openai_pretrained_model, LMModel
 from opt import OpenAIAdam
 from text_utils import TextEncoder
 from utils import (encode_dataset, iter_data,
@@ -44,13 +44,13 @@ def iter_apply(Xs, Ms, Ys):
     logits = []
     cost = 0
     with torch.no_grad():
-        dh_model.eval()
+        lm_model.eval()
         for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             YMB = torch.tensor(ymb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            _, clf_logits = dh_model(XMB)
+            _, clf_logits = lm_model(XMB)
             clf_logits *= n
             clf_losses = compute_loss_fct(XMB, YMB, MMB, clf_logits, only_return_losses=True)
             clf_losses *= n
@@ -63,12 +63,12 @@ def iter_apply(Xs, Ms, Ys):
 def iter_predict(Xs, Ms):
     logits = []
     with torch.no_grad():
-        dh_model.eval()
+        lm_model.eval()
         for xmb, mmb in iter_data(Xs, Ms, n_batch=n_batch_train, truncate=False, verbose=True):
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            _, clf_logits = dh_model(XMB)
+            _, clf_logits = lm_model(XMB)
             logits.append(clf_logits.to("cpu").numpy())
     logits = np.concatenate(logits, 0)
     return logits
@@ -90,7 +90,7 @@ def log(save_dir, desc):
         if score > best_score:
             best_score = score
             path = os.path.join(save_dir, desc, 'best_params')
-            torch.save(dh_model.state_dict(), make_path(path))
+            torch.save(lm_model.state_dict(), make_path(path))
 
 
 def predict(dataset, submission_dir):
@@ -112,11 +112,12 @@ def run_epoch():
     for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
                                    n_batch=n_batch_train, truncate=True, verbose=True):
         global n_updates
-        dh_model.train()
+        lm_model.train()
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        lm_logits, clf_logits = dh_model(XMB)
+        # lm_logits, clf_logits = lm_model(XMB)
+        lm_logits = lm_model(XMB)
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
@@ -241,10 +242,14 @@ if __name__ == '__main__':
     n_batch_train = args.n_batch * max(n_gpu, 1)
     n_updates_total = (n_train // n_batch_train) * args.n_iter
 
-    dh_model = DoubleHeadModel(args, clf_token, 'multiple_choice', vocab, n_ctx)
+    # change this one to LMModel
+    # dh_model = DoubleHeadModel(args, clf_token, 'multiple_choice', vocab, n_ctx)
+    lm_model = LMModel(args, vocab, n_ctx, return_probs=True)
+    # load_openai_pretrained_model(lm_model.transformer, n_ctx=n_ctx, n_special=n_special)
+    lm_model.to(device)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
-    model_opt = OpenAIAdam(dh_model.parameters(),
+    model_opt = OpenAIAdam(lm_model.parameters(),
                            lr=args.lr,
                            schedule=args.lr_schedule,
                            warmup=args.lr_warmup,
@@ -259,10 +264,10 @@ if __name__ == '__main__':
                                                  criterion,
                                                  args.lm_coef,
                                                  model_opt)
-    load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
+    load_openai_pretrained_model(lm_model.transformer, n_ctx=n_ctx, n_special=n_special)
 
-    dh_model.to(device)
-    dh_model = nn.DataParallel(dh_model)
+    lm_model.to(device)
+    lm_model = nn.DataParallel(lm_model)
 
     n_updates = 0
     n_epochs = 0
@@ -270,7 +275,7 @@ if __name__ == '__main__':
         trYt = trY
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
-        torch.save(dh_model.state_dict(), make_path(path))
+        torch.save(lm_model.state_dict(), make_path(path))
     best_score = 0
     for i in range(args.n_iter):
         print("running epoch", i)
@@ -279,7 +284,7 @@ if __name__ == '__main__':
         log(save_dir, desc)
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
-        dh_model.load_state_dict(torch.load(path))
+        lm_model.load_state_dict(torch.load(path))
         predict(dataset, args.submission_dir)
         if args.analysis:
             rocstories_analysis(data_dir, os.path.join(args.submission_dir, 'ROCStories.tsv'),
